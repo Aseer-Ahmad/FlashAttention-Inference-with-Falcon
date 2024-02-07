@@ -1,5 +1,4 @@
-# !pip install "peft==0.2.0"
-# !pip install "transformers==4.27.2" "datasets==2.9.0" "accelerate==0.17.1" "evaluate==0.4.0" "bitsandbytes==0.37.1" loralib --upgrade --quiet
+# pip install flash-attn --no-build-isolation
 
 #train.py
 from dataloader import getDataset, getDataloaders
@@ -64,15 +63,14 @@ def train(train_dataloader, trained_model_filename, yaml_data):
 
 	print(f"\nloading model {MODEL_NAME} , optimizer and scheduler")
 
-	model = AutoModelForCausalLM.from_pretrained(MODEL_NAME) # , low_cpu_mem_usage = True
+	model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, 
+											  torch_dtype=torch.bfloat16, # torch.float16
+											  attn_implementation="flash_attention_2") # , low_cpu_mem_usage = True
 	model.to(device)
 	num_training_steps = NUM_EPOCHS * num_batches
 	optimizer    = get_opt(model, OPTIMIZER_NAME, yaml_data)
 	lr_scheduler = get_schdlr(optimizer, num_training_steps)
 	
-	#LoRA 
-	model = getLoraModel(model)
-
 	if trained_model_filename != None:
 		model_chkpnt = os.path.join(PARENT_PATH, yaml_data['MODEL_CHKPNT_DIR'], trained_model_filename)  
 		model , optimizer, lr_scheduler = load_checkpoint(model, optimizer, lr_scheduler, model_chkpnt)	
@@ -212,7 +210,7 @@ def get_schdlr(optimizer, num_training_steps):
 
 	return lr_scheduler
 
-def eval(model, eval_dataloader, model_chkpnt, quantize, yaml_data):
+def inference(model, eval_dataloader, yaml_data,  model_chkpnt = None):
 	
 	print("starting eval ...")
 
@@ -222,24 +220,19 @@ def eval(model, eval_dataloader, model_chkpnt, quantize, yaml_data):
 	SEQ_LEN           = int(yaml_data['SEQ_LEN'])
 	BATCH_SIZE		  = int(yaml_data['BATCH_SIZE'])
 
+	print(f'BATCH SIZE : {BATCH_SIZE}')
+	print(f'SEQ LEN : {SEQ_LEN}')
+
 	device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 	metric = None #evaluate.load("accuracy")	
 
-	model_chkpnt = os.path.join(PARENT_PATH, MODEL_CHKPNT_DIR, model_chkpnt)
-
+	#checkpoint loading
 	if model is None and model_chkpnt != None:
+		model_chkpnt = os.path.join(PARENT_PATH, MODEL_CHKPNT_DIR, model_chkpnt)
 		model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
 		model , optimizer, lr_scheduler,= load_checkpoint(model, None, None, model_chkpnt)
 
-	if quantize : 
-		print("model size before quantization")
-		check_model_size(model)
-		print(model)
-		model = dynamic_quantization(model)
-		device = torch.device("cpu")
-		print(model)
-		print("model size after quantization")
-		check_model_size(model)
+	#make sure model is in fp16 or bf16 for flash attention
 
 	model.to(device)
 	model.eval()
@@ -249,6 +242,8 @@ def eval(model, eval_dataloader, model_chkpnt, quantize, yaml_data):
 	running_loss = 0
 
 	st = time.time()
+	tot_gpu_mem, tot_cpu_mem = 0., 0.
+
 	for batch in eval_dataloader:
 		batch = {k: v.to(device) for k, v in batch.items()}
 		with torch.no_grad():
@@ -258,24 +253,31 @@ def eval(model, eval_dataloader, model_chkpnt, quantize, yaml_data):
 
 			print(f"batch : {count}/{num_batches} loss : {loss}")
 			count += 1
-
 			# logits      = outputs.logits
 			# predictions = torch.argmax(logits, dim=-1)
 			# metric.add_batch(predictions=predictions, references=batch["labels"])
 			# metric.compute()
 
+		gpu_mem, gpu_mem_max = check_gpu_memory()
+		cpu_mem              = check_cpu_memory()
+		tot_gpu_mem += gpu_mem
+		tot_cpu_mem += cpu_mem
+
 	et =  time.time()
 	run_time = et - st
 
-	gpu_mem, gpu_mem_max = check_gpu_memory()
-	cpu_mem              = check_cpu_memory()
-
-	#token throughput 
+	# logs
 	print(f'total running time : {run_time} seconds')
+	print(f'avg inference time per batch : {run_time / num_batches} seconds')
 	print(f'token throughput : {(SEQ_LEN * BATCH_SIZE * num_batches ) / run_time :.4f} tokens per second')
 	print(f"average loss : {running_loss / num_batches}")
+	print(f'Average gpu memory consumption per batch: {tot_gpu_mem / num_batches :.4f} MB')
+	print(f'Average cpu memory consumption per batch: {tot_cpu_mem / num_batches :.4f} MB')
 
-	check_model_size(model)
+	#test for 
+	# seq len vs speed for (f1, f2, normal)
+	# mem. consumption vs speed for (f1, f2, normal)
+	# batch size vs speed (f1, f2, normal) 
 		
 
 def config():
@@ -291,7 +293,9 @@ def free_memory():
 def loadModel(yaml_data):
 	MODEL_NAME        = yaml_data['MODEL_NAME']
 	print(f"\nloading model {MODEL_NAME}")
-	model = AutoModelForCausalLM.from_pretrained(MODEL_NAME) # , low_cpu_mem_usage = True
+	model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, 
+											  torch_dtype=torch.bfloat16,  # torch.float16
+											  attn_implementation="flash_attention_2") # check flash-attn installation 
 	return model
 
 
@@ -310,8 +314,8 @@ def main():
 	trained_model_filename = None
 	data = getDataset(yaml_data)
 	train_dataloader, eval_dataloader = getDataloaders(data, yaml_data)
-	model = train(train_dataloader, trained_model_filename,  yaml_data)
-
+	model = loadModel(yaml_data)
+	inference(model, eval_dataloader, yaml_data)
 
 if __name__ == '__main__':
 	main()
