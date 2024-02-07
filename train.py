@@ -298,8 +298,6 @@ def loadModel(yaml_data):
 											  attn_implementation="flash_attention_2") # check flash-attn installation 
 	return model
 
-
-
 def main():
 
 	yaml_data  = config()
