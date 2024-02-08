@@ -22,7 +22,7 @@ from torch.cuda.amp import autocast
 from torch.cuda.amp import GradScaler 
 
 import pandas as pd
-from helpers.peft_prep import getLoraModel
+
 
 log_dir = "logs"  # Specify the directory where you want to store the logs
 # summary_writer = tf.summary.create_file_writer(log_dir)
@@ -247,11 +247,13 @@ def inference(model, eval_dataloader, yaml_data,  model_chkpnt = None):
 	for batch in eval_dataloader:
 		batch = {k: v.to(device) for k, v in batch.items()}
 		with torch.no_grad():
+			bst         = time.time()
 			outputs 	= model(**batch)
+			bet         = time.time()
 			loss		= outputs.loss
 			running_loss += loss
 
-			print(f"batch : {count}/{num_batches} loss : {loss}")
+			print(f"batch : {count}/{num_batches} elapsed time : {(bet-bst)} loss : {loss}")
 			count += 1
 			# logits      = outputs.logits
 			# predictions = torch.argmax(logits, dim=-1)
@@ -292,10 +294,15 @@ def free_memory():
 
 def loadModel(yaml_data):
 	MODEL_NAME        = yaml_data['MODEL_NAME']
+	ATTN_IMPL         = yaml_data['ATTN_IMPL']
+
 	print(f"\nloading model {MODEL_NAME}")
 	model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, 
 											  torch_dtype=torch.bfloat16,  # torch.float16
-											  attn_implementation="flash_attention_2") # check flash-attn installation 
+                                              #device_map="auto",
+                                              #use_flash_attention_2=True,
+											  attn_implementation=str(ATTN_IMPL) # "flash_attention_2"
+                                              ) # sdpa # check flash-attn installation 
 	return model
 
 def main():

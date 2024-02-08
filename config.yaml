@@ -1,5 +1,5 @@
 MODEL_NAME : tiiuae/falcon-7b
-MODEL_CHKPNT_DIR : models\f-7b\SINGLE\
+MODEL_CHKPNT_DIR : models/f-7b/
 TOKENIZER  : tiiuae/falcon-7b
 
 DATASET_NAME  : databricks/databricks-dolly-15k
@@ -12,6 +12,7 @@ SEQ_LEN    : 128
 BATCH_SIZE : 8
 OPTIMIZER_NAME : AdamW
 MOMENTUM : 0.9
+ATTN_IMPL : sdpa
 
 OPT_LEVEL : 'O0'
 TOP_K  :
